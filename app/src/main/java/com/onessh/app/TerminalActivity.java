@@ -1,13 +1,11 @@
 package com.onessh.app;
 
 import android.app.Activity;
-import android.app.Dialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
-import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -16,7 +14,6 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.onessh.app.data.Host;
@@ -508,149 +505,30 @@ public class TerminalActivity extends Activity implements TerminalView.Listener 
         finish();
     }
 
-    /**
-     * 代码片段：点一行就发到当前会话；每行右边的 ⋮ 可以发送 / 编辑 / 删除；
-     * 底部「新增片段」直接在这里建，不用退回主机列表再进片段管理。
-     * 编辑器和保存规则跟 SnippetsActivity 是一套（命令必填，名字空了就
-     * 用命令第一行兜底），存在同一个 Store 里，两边看到的是同一份。
-     */
+    /** 把保存的片段直接发到当前会话 */
     private void snippetSheet() {
         if (term != null) term.clearCtrlLatch();
         List<Snippet> list = store.snippets();
-
-        final Dialog[] sheet = new Dialog[1];
-        LinearLayout content = UI.column(this);
-
         if (list.isEmpty()) {
-            TextView hint = UI.text(this, "还没有代码片段，先建一个，之后在这里一键发送。",
-                    12.5f, UI.MUTED);
-            hint.setLineSpacing(UI.dp(3), 1f);
-            content.addView(hint);
-        } else {
-            ScrollView sc = new ScrollView(this);
-            sc.setVerticalScrollBarEnabled(false);
-            LinearLayout rows = UI.column(this);
-            for (Snippet sn : list) rows.addView(snippetRow(sn, sheet));
-            sc.addView(rows);
-            sc.setLayoutParams(new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, UI.dp(320)));
-            content.addView(sc);
+            Dialogs.alert(this, "还没有代码片段",
+                    "先到主机的「代码片段」里把常用命令存起来，这里就能一键发送。");
+            return;
         }
-
-        LinearLayout add = Widgets.button(this, "新增片段", "plus", true);
-        LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        ap.topMargin = UI.dp(14);
-        add.setLayoutParams(ap);
-        add.setOnClickListener(v -> {
-            if (sheet[0] != null) sheet[0].dismiss();
-            snippetEditor(null);
-        });
-        content.addView(add);
-
-        sheet[0] = Dialogs.custom(this, "发送代码片段", "点一行直接发送",
-                content, "关闭", null, false, null);
-    }
-
-    private View snippetRow(Snippet sn, Dialog[] sheet) {
-        LinearLayout row = UI.row(this);
-        row.setBackground(UI.ripple(UI.PAPER2, 10f));
-        UI.padding(row, 12, 11, 12, 11);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.bottomMargin = UI.dp(4);
-        row.setLayoutParams(lp);
-
-        LinearLayout col = UI.column(this);
-        col.addView(UI.medium(this,
-                sn.name == null || sn.name.isEmpty() ? "未命名" : sn.name, 13.5f, UI.INK));
-        TextView cmd = UI.mono(this, sn.command.replace("\n", " ⏎ "), 11f, UI.MUTED);
-        cmd.setSingleLine(true);
-        cmd.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        col.addView(cmd);
-        row.addView(col);
-        UI.weight(col, 1f);
-
-        row.addView(Widgets.barIcon(this, "more", UI.MUTED, () -> Dialogs.sheet(this, sn.name,
-                new String[]{"发送", "编辑", "删除"},
-                new String[]{"terminal", "edit", "trash"}, 2, idx -> {
-                    switch (idx) {
-                        case 0:
-                            if (sheet[0] != null) sheet[0].dismiss();
-                            sendSnippet(sn);
-                            break;
-                        case 1:
-                            if (sheet[0] != null) sheet[0].dismiss();
-                            snippetEditor(sn);
-                            break;
-                        default:
-                            Dialogs.confirm(this, "删除片段",
-                                    "确定删除「" + sn.name + "」吗？", "删除", true, () -> {
-                                        store.deleteSnippet(sn.id);
-                                        if (sheet[0] != null) sheet[0].dismiss();
-                                        snippetSheet();
-                                    });
-                            break;
-                    }
-                })));
-
-        row.setOnClickListener(v -> {
-            if (sheet[0] != null) sheet[0].dismiss();
-            sendSnippet(sn);
-        });
-        return row;
-    }
-
-    private void sendSnippet(Snippet sn) {
-        if (term != null) term.scrollToBottom();
-        for (String line : sn.command.split("\n")) {
-            write(line + "\r");
+        String[] labels = new String[list.size()];
+        String[] subs = new String[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            Snippet sn = list.get(i);
+            labels[i] = sn.name;
+            subs[i] = sn.command.replace("\n", " ⏎ ");
         }
-        UI.toast(this, "已发送：" + sn.name);
-    }
-
-    /** 新增 / 编辑片段的弹窗，保存后回到片段列表，改完马上就能发 */
-    private void snippetEditor(Snippet snippet) {
-        Snippet editing = snippet != null ? snippet : new Snippet();
-
-        LinearLayout form = UI.column(this);
-        Widgets.Field nameField = Widgets.field(this, "名称", "例如：查看磁盘占用",
-                InputType.TYPE_CLASS_TEXT);
-        nameField.setText(editing.name);
-        form.addView(nameField.root);
-
-        Widgets.Field cmdField = Widgets.field(this, "命令",
-                "例如：df -h\ntop -b -n1 | head -20",
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        cmdField.input.setTypeface(UI.MONO);
-        cmdField.input.setTextSize(12f);
-        cmdField.input.setMinLines(4);
-        cmdField.input.setInputType(InputType.TYPE_CLASS_TEXT
-                | InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        cmdField.setText(editing.command);
-        Widgets.top(cmdField.root, 12);
-        form.addView(cmdField.root);
-
-        Dialogs.custom(this, snippet == null ? "新增片段" : "编辑片段",
-                "命令按原样发送（末尾会自动补一个回车）。多行命令会逐行发送。",
-                form, "保存", "取消", false, () -> {
-                    String name = nameField.text().trim();
-                    String command = cmdField.text().trim();
-                    if (command.isEmpty()) {
-                        UI.toast(this, "命令不能为空");
-                        return;
-                    }
-                    if (name.isEmpty()) {
-                        String first = command.split("\n")[0].trim();
-                        name = first.length() > 24 ? first.substring(0, 24) + "…" : first;
-                    }
-                    editing.name = name;
-                    editing.command = command;
-                    store.saveSnippet(editing);
-                    UI.toast(this, "已保存");
-                    snippetSheet();
-                });
+        Dialogs.choose(this, "发送代码片段", labels, subs, -1, idx -> {
+            Snippet sn = list.get(idx);
+            term.scrollToBottom();
+            for (String line : sn.command.split("\n")) {
+                write(line + "\r");
+            }
+            UI.toast(this, "已发送：" + sn.name);
+        });
     }
 
     private void copyAll() {
