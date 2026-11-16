@@ -5,7 +5,6 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
@@ -21,16 +20,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.onessh.app.data.Host;
-import com.onessh.app.data.HostIO;
 import com.onessh.app.data.Store;
 import com.onessh.app.ui.Dialogs;
 import com.onessh.app.ui.UI;
 import com.onessh.app.ui.Widgets;
 
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -46,13 +40,8 @@ public class MainActivity extends Activity {
 
     private static final String PREFS = "ui";
     private static final String PREF_COLLAPSED = "collapsedGroups";
-    private static final int REQ_IMPORT_FILE = 201;
-    private static final int REQ_EXPORT_FILE = 202;
 
     private Store store;
-
-    /* 导出文件时先把文本攒着，等用户选好位置再写 */
-    private String pendingExport;
 
     private LinearLayout railBox;
     private LinearLayout tabsHost;
@@ -340,18 +329,6 @@ public class MainActivity extends Activity {
         foot.addView(countText);
         UI.weight(countText, 1f);
 
-        LinearLayout importBtn = Widgets.link(this, "导入", "download", UI.MUTED);
-        importBtn.setOnClickListener(v -> importSheet());
-        foot.addView(importBtn);
-
-        LinearLayout exportBtn = Widgets.link(this, "导出", "upload", UI.MUTED);
-        exportBtn.setOnClickListener(v -> exportSheet());
-        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        elp.leftMargin = UI.dp(14);
-        exportBtn.setLayoutParams(elp);
-        foot.addView(exportBtn);
-
         LinearLayout refresh = Widgets.link(this, "刷新", "refresh", UI.MUTED);
         refresh.setOnClickListener(v -> {
             render();
@@ -367,121 +344,6 @@ public class MainActivity extends Activity {
         wrap.addView(UI.hline(this, UI.LINE));
         wrap.addView(foot);
         return wrap;
-    }
-
-    /* ------------------------------------------------------------- 导入 / 导出 */
-
-    private void importSheet() {
-        Dialogs.sheet(this, "导入主机",
-                new String[]{"从剪贴板导入", "从文件导入"},
-                new String[]{"clipboard", "folder"}, -1, idx -> {
-                    if (idx == 0) importFromClipboard();
-                    else importFromFile();
-                });
-    }
-
-    private void exportSheet() {
-        Dialogs.sheet(this, "导出主机",
-                new String[]{"复制到剪贴板", "保存到文件"},
-                new String[]{"clipboard", "folder"}, -1, idx -> {
-                    if (idx == 0) exportToClipboard();
-                    else exportToFile();
-                });
-    }
-
-    private void importFromClipboard() {
-        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        if (cm == null || !cm.hasPrimaryClip()) {
-            UI.toast(this, "剪贴板里没有内容");
-            return;
-        }
-        ClipData clip = cm.getPrimaryClip();
-        if (clip == null || clip.getItemCount() == 0) {
-            UI.toast(this, "剪贴板里没有内容");
-            return;
-        }
-        CharSequence text = clip.getItemAt(0).getText();
-        if (text == null || text.toString().trim().isEmpty()) {
-            UI.toast(this, "剪贴板里没有内容");
-            return;
-        }
-        doImport(text.toString());
-    }
-
-    private void importFromFile() {
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("*/*");
-        try {
-            startActivityForResult(i, REQ_IMPORT_FILE);
-        } catch (Exception e) {
-            UI.toast(this, "没有可用的文件选择器");
-        }
-    }
-
-    private void doImport(String text) {
-        HostIO.ImportData data = HostIO.parse(text);
-        if (data.hosts.isEmpty() && data.groups.isEmpty()) {
-            UI.toast(this, "没有可导入的主机");
-            return;
-        }
-        HostIO.MergeResult r = HostIO.merge(store, data);
-        UI.toast(this, "导入完成：新增 " + r.hostsAdded + " 台主机、"
-                + r.groupsAdded + " 个分组"
-                + (r.hostsSkipped > 0 ? "，跳过 " + r.hostsSkipped + " 台重复" : ""));
-        render();
-    }
-
-    private void exportToClipboard() {
-        String text = HostIO.exportText(store);
-        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        if (cm == null) return;
-        cm.setPrimaryClip(ClipData.newPlainText("hosts", text));
-        UI.toast(this, "已复制到剪贴板");
-    }
-
-    private void exportToFile() {
-        pendingExport = HostIO.exportText(store);
-        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("text/plain");
-        i.putExtra(Intent.EXTRA_TITLE, HostIO.exportFileName());
-        try {
-            startActivityForResult(i, REQ_EXPORT_FILE);
-        } catch (Exception e) {
-            UI.toast(this, "没有可用的文件选择器");
-        }
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
-        Uri uri = data.getData();
-        if (requestCode == REQ_IMPORT_FILE) {
-            try (InputStream in = getContentResolver().openInputStream(uri)) {
-                if (in == null) throw new Exception("读不到文件");
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
-                doImport(new String(bos.toByteArray(), StandardCharsets.UTF_8));
-            } catch (Exception e) {
-                UI.toast(this, "导入失败：" + e.getMessage());
-            }
-        } else if (requestCode == REQ_EXPORT_FILE) {
-            if (pendingExport == null) return;
-            try (OutputStream out = getContentResolver().openOutputStream(uri)) {
-                if (out == null) throw new Exception("写不到文件");
-                out.write(pendingExport.getBytes(StandardCharsets.UTF_8));
-                out.flush();
-                UI.toast(this, "已导出");
-            } catch (Exception e) {
-                UI.toast(this, "导出失败：" + e.getMessage());
-            } finally {
-                pendingExport = null;
-            }
-        }
     }
 
     /* ------------------------------------------------------------- 渲染 */
