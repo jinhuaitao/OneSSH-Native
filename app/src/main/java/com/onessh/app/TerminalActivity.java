@@ -484,8 +484,8 @@ public class TerminalActivity extends Activity implements TerminalView.Listener 
 
     private void moreMenu() {
         Dialogs.sheet(this, host != null ? host.label() : adHocHost,
-                new String[]{"最小化", "复制全部输出", "清屏", "终端字号", "重新连接", "断开连接"},
-                new String[]{"minimize", "copy", "trash", "gear", "refresh", "power"}, 5, idx -> {
+                new String[]{"最小化", "复制全部输出", "清屏", "终端字号", "mosh测试", "重新连接", "断开连接"},
+                new String[]{"minimize", "copy", "trash", "gear", "bolt", "refresh", "power"}, 6, idx -> {
                     switch (idx) {
                         case 0:
                             minimize();
@@ -500,12 +500,93 @@ public class TerminalActivity extends Activity implements TerminalView.Listener 
                             fontSheet();
                             break;
                         case 4:
+                            moshTest();
+                            break;
+                        case 5:
                             term.clearScreen();
                             connect();
                             break;
                         default:
                             askDisconnect();
                             break;
+                    }
+                });
+    }
+
+    /** mosh 测试用的引导命令：启动一个 mosh-server，确认能起来就立刻杀掉，不留残留 */
+    private static final String MOSH_TEST_CMD =
+            "mosh-server new -s -c 256 -l en_US.UTF-8 >/tmp/.mosh-test.out 2>&1 & echo $! >/tmp/.mosh-test.pid; "
+            + "sleep 3; cat /tmp/.mosh-test.out 2>/dev/null; "
+            + "kill -9 $(cat /tmp/.mosh-test.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/.mosh-test.out /tmp/.mosh-test.pid";
+
+    /** 测试失败时「mosh测试命令行」发的诊断命令：mosh-server、locale、UDP 监听、防火墙 */
+    private static final String MOSH_DIAG_CMD =
+            "echo '=== mosh-server ==='; command -v mosh-server >/dev/null 2>&1 && mosh-server --version || echo '未安装 mosh-server'; "
+            + "echo '=== locale ==='; locale 2>/dev/null | grep -iE '^(LANG|LC_CTYPE)='; "
+            + "echo '=== UDP 监听 ==='; (command -v ss >/dev/null 2>&1 && ss -uln || netstat -uln 2>/dev/null) | grep -E '6000[0-9]|61000' || echo '无 UDP 60000-61000 监听（mosh-server 未启动时正常）'; "
+            + "echo '=== 防火墙 ==='; command -v ufw >/dev/null 2>&1 && sudo ufw status | head -20; "
+            + "command -v firewall-cmd >/dev/null 2>&1 && sudo firewall-cmd --list-ports; "
+            + "command -v iptables >/dev/null 2>&1 && sudo iptables -L INPUT -n | grep -iE 'udp|60000' | head";
+
+    /** 测试失败时「安装mosh」发的命令：按发行版装 mosh，并放行 UDP 60000-61000 */
+    private static final String MOSH_INSTALL_CMD =
+            "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y mosh; "
+            + "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y mosh; "
+            + "elif command -v yum >/dev/null 2>&1; then sudo yum install -y mosh; "
+            + "elif command -v pacman >/dev/null 2>&1; then sudo pacman -Sy --noconfirm mosh; "
+            + "elif command -v apk >/dev/null 2>&1; then sudo apk add mosh; "
+            + "else echo '未找到 apt/dnf/yum/pacman/apk，请手动安装 mosh-server'; fi; "
+            + "command -v ufw >/dev/null 2>&1 && sudo ufw allow 60000:61000/udp; "
+            + "command -v firewall-cmd >/dev/null 2>&1 && sudo firewall-cmd --permanent --add-port=60000-61000/udp && sudo firewall-cmd --reload; "
+            + "command -v iptables >/dev/null 2>&1 && sudo iptables -I INPUT -p udp --dport 60000:61000 -j ACCEPT";
+
+    /**
+     * ⋮ 菜单里的 mosh 测试：在已连的 SSH 会话上跑一条 exec，看 mosh-server 能不能起来。
+     * 通过只报一声；失败弹原因，带两个按钮把诊断 / 安装命令发到当前会话里执行。
+     * 已在用 Mosh 时不用测；没连上时也测不了。
+     */
+    private void moshTest() {
+        if (moshSession != null && moshSession.isConnected()) {
+            UI.toast(this, "当前就是 Mosh 会话，服务器没问题");
+            return;
+        }
+        if (session == null || !session.isConnected()) {
+            UI.toast(this, "还没连上，等连接成功再测");
+            return;
+        }
+        UI.toast(this, "正在测试 mosh-server…");
+        final SshSession s = session;
+        new Thread(() -> {
+            String fail = null;
+            try {
+                String output = s.exec(MOSH_TEST_CMD, 15000);
+                if (!MoshSession.containsMoshConnect(output)) {
+                    fail = MoshSession.classifyBootstrapFailure(output, -1);
+                }
+            } catch (Exception e) {
+                fail = "测试没跑起来：" + e.getMessage();
+            }
+            final String reason = fail;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (reason == null) {
+                    UI.toast(this, "Mosh 测试通过：服务器可以启动 mosh-server");
+                } else {
+                    showMoshTestFailed(reason);
+                }
+            });
+        }, "mosh-test").start();
+    }
+
+    /** 测试失败：给两个按钮，把诊断 / 安装命令发到当前会话里执行 */
+    private void showMoshTestFailed(String reason) {
+        Dialogs.sheet(this, reason,
+                new String[]{"mosh测试命令行", "安装mosh"},
+                new String[]{"terminal", "download"}, -1, idx -> {
+                    if (idx == 0) {
+                        write(MOSH_DIAG_CMD + "\r");
+                    } else {
+                        write(MOSH_INSTALL_CMD + "\r");
                     }
                 });
     }

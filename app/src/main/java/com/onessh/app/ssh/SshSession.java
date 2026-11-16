@@ -446,6 +446,61 @@ public final class SshSession {
         return sftp;
     }
 
+    /**
+     * 在已连的会话上跑一条 exec 命令并返回 stdout+stderr 全文；调用方负责在后台线程用。
+     * 超时返回已读到的部分并关掉通道；会话断开时抛 JSchException。
+     */
+    public String exec(String command, long timeoutMs) throws JSchException {
+        Session s = session;
+        if (s == null || !s.isConnected()) throw new JSchException("连接已断开");
+        ChannelExec ex = null;
+        try {
+            ex = (ChannelExec) s.openChannel("exec");
+            ex.setCommand(command);
+            InputStream in = ex.getInputStream();
+            ByteArrayOutputStream err = new ByteArrayOutputStream();
+            ex.setErrStream(err);
+            ex.connect(10000);
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            while (System.currentTimeMillis() < deadline) {
+                int avail = in.available();
+                if (avail > 0) {
+                    int r = in.read(buf, 0, Math.min(avail, buf.length));
+                    if (r > 0) out.write(buf, 0, r);
+                } else if (ex.isClosed()) {
+                    break;
+                } else {
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                }
+            }
+            while (in.available() > 0) {
+                int r = in.read(buf, 0, Math.min(in.available(), buf.length));
+                if (r <= 0) break;
+                out.write(buf, 0, r);
+            }
+            return new String(out.toByteArray(), StandardCharsets.UTF_8)
+                    + "\n" + new String(err.toByteArray(), StandardCharsets.UTF_8);
+        } catch (JSchException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new JSchException("exec 失败：" + e.getMessage());
+        } finally {
+            if (ex != null) {
+                try {
+                    ex.disconnect();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
     public void close() {
         if (closed) return;
         closed = true;

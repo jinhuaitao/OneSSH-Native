@@ -204,8 +204,13 @@ public final class MoshSession {
         }
     }
 
+    /** 输出里有没有 MOSH CONNECT 行（mosh-server 成功启动的标志） */
+    public static boolean containsMoshConnect(String output) {
+        return output != null && MOSH_CONNECT.matcher(output).find();
+    }
+
     /** 引导失败分三类，别笼统报“连接失败” */
-    private String classifyBootstrapFailure(String output, int exitStatus) {
+    public static String classifyBootstrapFailure(String output, int exitStatus) {
         String o = output == null ? "" : output;
         String lower = o.toLowerCase();
         if (lower.contains("command not found") || lower.contains("not found")
