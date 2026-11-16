@@ -488,9 +488,9 @@ public class TerminalView extends View {
                 downX = ev.getX();
                 downY = ev.getY();
                 if (selecting) {
-                    // 选中模式下：按到手柄就拖它，按到别处就退出选中
+                    // 选中模式下：按到手柄就拖它；按到别处先不退出——松手时是轻点才退出，
+                    // 是滑动则滚动且保留选中（上下滑屏幕不再丢选区）
                     dragHandle = handleHit(ev.getX(), ev.getY());
-                    if (dragHandle == 0) clearTextSelection();
                     cancelPendingLongPress();
                     return true;
                 }
@@ -525,8 +525,17 @@ public class TerminalView extends View {
                         }
                         normalizeSelection();
                         invalidate();
+                        return true;
                     }
-                    // 选中模式下不滚动：没按手柄的滑动直接忽略
+                    // 没按手柄的滑动：当作滚动，保留选中（选区跟着内容走）
+                    if (tracker != null) tracker.addMovement(ev);
+                    float dy = lastY - ev.getY();
+                    if (Math.abs(dy) > 1) {
+                        dragging = true;
+                        scrollPx = Math.max(0, Math.min(maxScrollPx(), scrollPx + dy));
+                        lastY = ev.getY();
+                        invalidate();
+                    }
                     return true;
                 }
                 if (tracker != null) tracker.addMovement(ev);
@@ -547,7 +556,27 @@ public class TerminalView extends View {
             case MotionEvent.ACTION_UP: {
                 cancelPendingLongPress();
                 if (selecting) {
-                    dragHandle = 0;
+                    if (dragHandle != 0) {
+                        dragHandle = 0;
+                        return true;
+                    }
+                    if (tracker != null) {
+                        tracker.addMovement(ev);
+                        tracker.computeCurrentVelocity(1000);
+                        float vy = tracker.getYVelocity();
+                        tracker.recycle();
+                        tracker = null;
+                        if (dragging && Math.abs(vy) > 400) {
+                            // 滑动后的 fling，保留选中
+                            scroller.fling(0, (int) scrollPx, 0, (int) -vy, 0, 0, 0, (int) maxScrollPx());
+                            postInvalidateOnAnimation();
+                        } else if (isTap(ev)) {
+                            // 轻点别处：退出选中
+                            clearTextSelection();
+                        }
+                    } else if (isTap(ev)) {
+                        clearTextSelection();
+                    }
                     return true;
                 }
                 if (tracker != null) {
@@ -584,6 +613,13 @@ public class TerminalView extends View {
             longPressHandler.removeCallbacks(longPressTask);
             longPressTask = null;
         }
+    }
+
+    /** 松手时位移在系统触摸容差内，算轻点（而不是滑动） */
+    private boolean isTap(MotionEvent ev) {
+        int slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
+        return Math.abs(ev.getX() - downX) <= slop
+                && Math.abs(ev.getY() - downY) <= slop;
     }
 
     /** 触摸纵坐标换算成“回滚区 + 当前屏”的统一行号，跟 onDraw 用的算法一致 */

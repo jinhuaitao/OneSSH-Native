@@ -933,7 +933,7 @@ public class TerminalActivity extends Activity implements TerminalView.Listener 
                 });
     }
 
-    /** 长按一行后“加片段”：命令框里直接填好按住的那行，名字空着，保存时自动用命令第一行当名字 */
+    /** 把一段文字存成新片段：命令框里直接填好，名字空着，保存时自动用命令第一行当名字 */
     private void snippetEditorNew(String command) {
         Snippet fresh = new Snippet();
         fresh.command = command;
@@ -1000,6 +1000,11 @@ public class TerminalActivity extends Activity implements TerminalView.Listener 
         copy.setOnClickListener(v -> copySelection());
         bar.addView(copy);
 
+        LinearLayout snippet = Widgets.button(this, "片段", "plus", false);
+        Widgets.margins(snippet, 8, 0, 0, 0);
+        snippet.setOnClickListener(v -> addSelectionToSnippet());
+        bar.addView(snippet);
+
         LinearLayout cancel = Widgets.button(this, "取消", null, false);
         Widgets.margins(cancel, 8, 0, 0, 0);
         cancel.setOnClickListener(v -> {
@@ -1018,6 +1023,20 @@ public class TerminalActivity extends Activity implements TerminalView.Listener 
         }
         copyText(text, "已复制");
         term.clearTextSelection();
+    }
+
+    /** 选中栏里的「片段」：把选中的文字存成新片段，复用长按「加片段」的编辑器 */
+    private void addSelectionToSnippet() {
+        if (term == null) return;
+        String text = term.selectedText();
+        if (text == null) text = "";
+        text = text.trim();
+        if (text.isEmpty()) {
+            UI.toast(this, "选中的内容是空的");
+            return;
+        }
+        term.clearTextSelection();
+        snippetEditorNew(text);
     }
 
     private void copyText(String text, String toast) {
